@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>O’Hazi</title>
+<style>
+:root{--p:#d62828;--bg:#fff;--fg:#1b1b1b;--mut:#6b6b6b;--card:#f4f4f4}
+@media(prefers-color-scheme:dark){:root{--bg:#121212;--fg:#f2f2f2;--mut:#a0a0a0;--card:#1e1e1e}}
+*{box-sizing:border-box}body{margin:0;font:16px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding-bottom:84px}
+header{padding:16px;display:flex;justify-content:space-between;align-items:center;gap:8px}h1{margin:0;font-size:22px}
+.pill{padding:4px 10px;border-radius:99px;font-size:13px;background:var(--card)}.open{color:#1a7f37}.shut{color:#b42318}
+nav{display:flex;gap:8px;overflow-x:auto;padding:0 16px 8px}nav button{white-space:nowrap}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--card);color:var(--fg);cursor:pointer}button.pri{background:var(--p);color:#fff}
+.card{display:flex;gap:12px;margin:8px 16px;padding:10px;background:var(--card);border-radius:14px}
+.card img{width:84px;height:84px;object-fit:cover;border-radius:10px;background:#8883}.card>div{flex:1}.card p{margin:4px 0;color:var(--mut);font-size:14px}
+.bar{position:fixed;left:12px;right:12px;bottom:12px}.bar button{width:100%;padding:14px}
+dialog{width:min(520px,100%);max-height:90vh;overflow:auto;border:0;border-radius:16px 16px 0 0;padding:16px;background:var(--bg);color:var(--fg);margin:auto auto 0}dialog::backdrop{background:#0008}
+label{display:block;margin:8px 0}input,textarea{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid #8884;background:var(--bg);color:var(--fg)}
+input[type=radio],input[type=checkbox]{width:auto}.row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0}.err{color:#b42318}
+</style></head><body>
+<header><h1 id="name">O’Hazi</h1><span id="status" class="pill">…</span></header>
+<div id="msg" class="err" style="padding:0 16px"></div>
+<nav id="cats"></nav><main id="list"></main>
+<div class="bar"><button class="pri" id="cartBtn" hidden></button></div>
+<dialog id="dlg"></dialog>
+<script src="config.js"></script>
+<script>
+const {url,key}=window.OHAZI,H={apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'};
+const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const eur=c=>(c/100).toFixed(2).replace('.',',')+' €';
+const MSG={ORDERS_PAUSED:'Les commandes sont momentanément en pause.',CLOSED:'O’Hazi est fermé pour le moment.',PRODUCT_UNAVAILABLE:'Un produit n’est plus disponible.',OPTIONS_INVALID:'Les options choisies ne sont plus valides.',INVALID_CUSTOMER:'Vérifiez votre nom et votre téléphone.',INVALID_ITEMS:'Panier invalide.'};
+const get=async q=>{const r=await fetch(url+'/rest/v1/'+q,{headers:H});if(!r.ok)throw new Error(r.status);return r.json()};
+let products=[],cart=[],cat=null,paused=false,hours=[];
+const line=c=>(c.p.price_cents+c.opts.reduce((s,o)=>s+o.price_delta_cents,0))*c.qty;
+
+function isOpen(){if(paused)return false;if(!hours.length)return true;
+ const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+ const g=t=>p.find(x=>x.type===t).value,d=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(g('weekday')),t=g('hour')+':'+g('minute');
+ return hours.some(h=>h.weekday===d&&t>=h.opens.slice(0,5)&&t<=h.closes.slice(0,5))}
+function renderStatus(){const o=isOpen(),s=$('status');s.textContent=paused?'Commandes en pause':o?'Ouvert':'Fermé';s.className='pill '+(o?'open':'shut')}
+function renderCats(c){$('cats').innerHTML=[{id:null,name:'Tout'},...c].map(x=>`<button data-c="${x.id??''}" ${x.id===cat?'class="pri"':''}>${esc(x.name)}</button>`).join('');
+ $('cats').onclick=e=>{const b=e.target.closest('button');if(!b)return;cat=b.dataset.c||null;renderCats(c);renderList()}}
+const img=p=>{const m=(p.product_media||[]).filter(x=>x.kind==='image').sort((a,b)=>b.is_primary-a.is_primary||a.sort_order-b.sort_order)[0];
+ return m?`<img loading="lazy" alt="" src="${url}/storage/v1/object/public/media/${encodeURI(m.storage_path)}">`:'<img alt="">'};
+function renderList(){const l=products.filter(p=>!cat||p.category_id===cat);
+ $('list').innerHTML=l.length?l.map(p=>`<div class="card">${img(p)}<div><b>${esc(p.name)}</b><p>${esc(p.description)}</p><div class="row"><b>${eur(p.price_cents)}</b><button class="pri" data-p="${p.id}">Ajouter</button></div></div></div>`).join(''):'<p style="padding:16px">Aucun produit pour le moment.</p>'}
+$('list').onclick=e=>{const b=e.target.closest('[data-p]');if(b)pick(products.find(p=>p.id===b.dataset.p))};
+
+function add(p,ids){const opts=(p.product_option_groups||[]).flatMap(x=>x.option_groups?.options||[]).filter(o=>ids.includes(o.id));cart.push({p,ids,opts,qty:1});renderCart()}
+function pick(p){const gs=(p.product_option_groups||[]).map(x=>x.option_groups).filter(g=>g&&g.options.length);
+ if(!gs.length)return add(p,[]);
+ const d=$('dlg');d.innerHTML=`<h3>${esc(p.name)}</h3><form id="of">${gs.map(g=>`<fieldset><legend>${esc(g.name)} <small>${g.min_select?'(obligatoire)':'(facultatif)'}${g.max_select>1?' · max '+g.max_select:''}</small></legend>${g.options.map(o=>`<label><input type="${g.max_select>1?'checkbox':'radio'}" name="${g.id}" value="${o.id}"> ${esc(o.name)}${o.price_delta_cents?' (+'+eur(o.price_delta_cents)+')':''}</label>`).join('')}</fieldset>`).join('')}<p class="err" id="oe"></p><div class="row"><button type="button" id="oc">Annuler</button><button class="pri">Ajouter</button></div></form>`;
+ d.showModal();$('oc').onclick=()=>d.close();
+ $('of').onsubmit=e=>{e.preventDefault();const ids=[];
+  for(const g of gs){const sel=[...d.querySelectorAll(`input[name="${g.id}"]:checked`)].map(i=>i.value);
+   if(sel.length<g.min_select||sel.length>g.max_select){$('oe').textContent=`Choix à faire pour « ${g.name} » (${g.min_select} à ${g.max_select}).`;return}ids.push(...sel)}
+  d.close();add(p,ids)}}
+
+function renderCart(){const n=cart.reduce((s,c)=>s+c.qty,0),b=$('cartBtn');b.hidden=!n;b.textContent=`Voir le panier (${n}) · ${eur(cart.reduce((s,c)=>s+line(c),0))}`}
+$('cartBtn').onclick=()=>openCart();
+function openCart(){const d=$('dlg'),tot=cart.reduce((s,c)=>s+line(c),0);
+ d.innerHTML=`<h3>Panier</h3>${cart.map((c,i)=>`<div class="row"><div><b>${esc(c.p.name)}</b><br><small>${esc(c.opts.map(o=>o.name).join(', '))}</small></div><div><button data-m="${i}">−</button> ${c.qty} <button data-a="${i}">+</button> <b>${eur(line(c))}</b></div></div>`).join('')}
+<div class="row"><b>Total</b><b>${eur(tot)}</b></div><p><small>Retrait sur place, dès que possible. Le prix final est recalculé et confirmé par le serveur.</small></p>
+<form id="cf"><label>Prénom<input name="first_name" required maxlength="80" autocomplete="given-name"></label><label>Nom<input name="last_name" required maxlength="80" autocomplete="family-name"></label><label>Téléphone<input name="phone" type="tel" required autocomplete="tel"></label><label>E-mail (facultatif)<input name="email" type="email"></label><label>Remarque (facultatif)<textarea name="notes" maxlength="500"></textarea></label>
+<p class="err" id="ce"></p><div class="row"><button type="button" id="cc">Fermer</button><button class="pri" id="cs">Envoyer la commande</button></div></form>`;
+ if(!d.open)d.showModal();$('cc').onclick=()=>d.close();
+ d.onclick=e=>{const b=e.target.closest('[data-a],[data-m]');if(!b)return;const up=b.dataset.a!==undefined,i=+(up?b.dataset.a:b.dataset.m);
+  cart[i].qty+=up?1:-1;if(cart[i].qty<1)cart.splice(i,1);renderCart();cart.length?openCart():d.close()};
+ $('cf').onsubmit=async e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target)),btn=$('cs');btn.disabled=true;
+  const k=sessionStorage.ohk||(sessionStorage.ohk=crypto.randomUUID());
+  try{const r=await fetch(url+'/rest/v1/rpc/create_pickup_order',{method:'POST',headers:H,body:JSON.stringify({payload:{idempotency_key:k,customer:f,items:cart.map(c=>({product_id:c.p.id,quantity:c.qty,option_ids:c.ids}))}})});
+   const j=await r.json();if(!r.ok)throw new Error(j.message||'ERR');
+   cart=[];delete sessionStorage.ohk;renderCart();d.onclick=null;
+   d.innerHTML=`<h3>Commande envoyée ✅</h3><p>Numéro : <b>${esc(j.order_number)}</b>${j.total_cents!=null?'<br>Total à régler sur place : <b>'+eur(j.total_cents)+'</b>':''}</p><button class="pri" id="ok">Fermer</button>`;$('ok').onclick=()=>d.close();
+  }catch(x){$('ce').textContent=MSG[x.message]||'La commande n’a pas été envoyée. Réessayez.';btn.disabled=false}}}
+
+(async()=>{try{
+ const [cats,prods,st,hrs]=await Promise.all([get('categories?select=id,name&order=sort_order'),
+  get('products?select=id,name,description,price_cents,category_id,product_media(storage_path,kind,is_primary,sort_order),product_option_groups(option_groups(id,name,min_select,max_select,options(id,name,price_delta_cents)))&order=sort_order'),
+  get('site_settings?select=key,value'),get('opening_hours?select=weekday,opens,closes')]);
+ products=prods;hours=hrs;const S=Object.fromEntries(st.map(x=>[x.key,x.value]));paused=S.ordering_paused===true;
+ if(S.shop&&S.shop.name){$('name').textContent=S.shop.name;document.title=S.shop.name}
+ if(S.theme&&S.theme.primary)document.documentElement.style.setProperty('--p',S.theme.primary);
+ renderStatus();renderCats(cats);renderList();
+}catch(e){$('msg').textContent='Impossible de charger le menu. Réessayez plus tard.'}})();
+</script></body></html>
